@@ -1,0 +1,116 @@
+""" A multicast interface to Python's socket library 
+
+    Ignacio Martinez (igmartin@movistar.es)
+    January 2023
+
+    - Support for IPv4 and IPV6 multicasting by means of AF_INET and AF_INET6
+      address families.
+    - Use the standard socket interface with additions that ease
+      the configuration of socket options, including methods for joining
+      and leaving groups.
+    - Support for unicast datagram delivery in addition to multicasting
+    - Use getifaddrs module to obtain interface and address information
+    - Use getifmaddrs module to obtain multicast group and source information
+    - Support multiple concurrent joins on a socket, up to IP_MAX_MEMBERSHIPS
+    - Support Source Specific Multicast (SSM) for IPv4 and IPv6
+    - Support concurrent IPv4 and IPv6 operation on the same (v6) socket
+    - Support joins and leaves to/from IPv4 and IPv6 groups on same socket
+      (Linux only)
+    - Scoped multicast with interface based scope zone selection for
+      link local IPv6 addresses
+    - Work on Linux and MacOS
+
+    class McastSocket(socket)
+        ''' a subclass of 'socket' to simplify UDP multicasting and
+            datagram delivery '''
+
+        initialize with 'msock = McastSocket(ipmode)'
+        where 'ipmode' is the working mode for the socket, which can be
+        IPv4 only, IPv6 only or mixed IPv6/IPv4.
+        Select one out of IPM_IPV4, IPM_IPV6, IPM_BOTH
+
+    overloaded methods:
+
+        res = bind(ifaddr, service)
+        res = connect(mgroup, service)       
+        buffer, address, port = recvfrom()
+        res = sendto(buffer, mgroup, service)
+        close()
+
+    other class methods:
+
+        res = join(mgroup, ifaddr=None, source=None)
+        res = leave(mgroup, ifaddr=None, source=None)
+        res = leaveall()
+        res = set_recvoptions(reuseaddress=-1, reuseport=-1)
+        res = set_sendoptions(fwdif=None, loop=-1, ttl=-1, prec=-1):
+
+    meaning of arguments and return parameters:
+
+        ifname:  (str) interface name
+        ifindex: (int) the interface index, a numeric identifier
+        iface:   (NetworkInterface) an object containing information about
+                 an interface and its addresses
+        ifiter:  (iterable) an iterable returning each of the NetworkInterface
+                 objects. Typically returned by get_network_interfaces() 
+        ifaddr:  (str) address of a system interface. An IPv4 or IPv6 address.
+                 Addresses must be unique in a given scope (IPv6), so add
+                 scope zone when neccessary, e.g. "ff12::4567%eth0"
+                 (str) IPv4 or IPv6 address.
+                 The latter must be correctly scoped
+                 (str) An interface name on the system
+                 (int) The index of an interface
+                 Examples: "eth0", 3, "192.168.1.4", "fe80::2345%eth1", "::1"
+        service: a port name or number, or 0 for internal selection
+                 (str) a port name describing the service and resolved
+                 by a function like getservbyname()
+                 (int) a port number (a positive integer < 65536)
+                 use port 0 to let the system select a local port for you
+                 when binding, Examples: "echo", 7777
+        mgroup:  a multicast group address
+                 (str) a valid multicast group address
+                 Examples: "234.2.3.4", "ff12::3456%eth0"
+                 Note: as a generalization, unicast UDP datagram delivery
+                 is supoorted as well, so 'mgroup' can also be filled with
+                 a unicast address
+        source:  a unicast source address for group source selection
+                 (str) a valid unicast address
+                 used for joins and leaves when data is restricted to a
+                 particular source
+        buffer:  the data to be sent or the data actually received, as a
+                 bytes object
+                 (bytes) the default buffer size for reads is 8192
+                 Note: as a datagram service, ordered and reliable delivery
+                 is by no means guaranteed. User code must provide for packet
+                 ordereding and retransmission when required 
+                 Note: conversion from str to bytes is achieved specifying
+                 an encoding. A usual encoding for text is Unicode 'utf-8'.
+                 For byte-to-byte text encoding use "iso-8859-15" or similar.
+                 Example: "give me €uros".encode('utf-8'),
+                           b'give me \xe2\x82\xacuros'.decode() 
+        res:     the result of a method
+                 (int) 0 means success, 1 means failure
+
+    set_recvoptions and sendoptions arguments:
+
+        reuseaddress: permit two or more sockets binding to the same address
+                 (int) set to 1 to allow, 0 to disallow the feature
+        reuseport:    permit two or more sockets binding to the same port
+                 (int) set to 1 to allow, 0 to disallow the feature
+        fwdif:   set the forwarding interface for packets
+                 for IPv4 addresses, it must be the interface address
+                 as a string (str)
+                 for IPv6 addresses, it must be the interface name (str)
+                 or index (int)
+        loop:    permit/block receiving multicast messages in the same host
+                 where they are sent
+                 (int) set to 1 to allow, 0 to disallow the feature
+        ttl:     time to live of a packet. Decremented by routers as packets
+                 traverse them
+                 (int) a positive integer < 256
+                 use ttl=1 for local link transmission, ttl > 1 to reach
+                 other networks 
+        prec:    set the IP precedence bits in the IP header to indicate
+                 Quality of Service (qos)
+                 (int) a positive integer < 8
+"""

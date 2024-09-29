@@ -31,7 +31,7 @@
 
     overloaded methods:
 
-        res = bind(ifaddr, service)
+        res = bind(address, service)
         res = connect(mgroup, service)       
         buffer, address, port = recvfrom()
         res = sendto(buffer, mgroup, service)
@@ -299,29 +299,29 @@ class McastSocket(socket):
 
         return maddr.sockaddr
 
-    def _get_interface_sockaddr(self, ifaddr, service, family):
-        """ obtain the sockaddr structure parameter for an interface address
+    def _get_interface_sockaddr(self, address, service, family):
+        """ obtain the sockaddr structure parameter for an address
             used in bind() """
 
-        if not ifaddr:
+        if not address:
             if family == AF_INET:
                 paddr = "0.0.0.0"
             elif family == AF_INET6:
                 paddr = "::"
         else:
-            ifc = get_interface_by_id(ifaddr)
+            ifc = get_interface_by_id(address)
             if ifc:
                 addr  = get_interface_address(ifc.name, family)
                 paddr = addr.printable
             else:
-                # Must be a valid interface address
+                # Must be a valid interface address or group address
                 # will complain later otherwise
-                paddr = ifaddr
+                paddr = address
 
         addrobj = get_address(paddr, service, family, SOCK_DGRAM)
         if not addrobj:
             logger.error("Interface sockaddr error. address: %s, service: %s",
-                          ifaddr, service)
+                          address, service)
             return None
 
         return addrobj.sockaddr
@@ -454,28 +454,32 @@ class McastSocket(socket):
 #############
 # public
 #
-    def bind(self, ifaddr, service, reuseport=0):
-        """ local interface to bind() """
+    def bind(self, address, service, reuseport=0):
+        """ local interface to bind()
+            if address is an interface address, permit unicast UDP traffic
+            if address is a multicast group, filter datagrams on that group
+            if address is INADDR_ANY, permit any traffic
+        """
 
         if self.state == ST_CLOSED:
             logger.error("cannot bind socket to address. Socket is closed")
             return 1
 
-        address = self._get_interface_sockaddr(ifaddr, service, self.family)
+        sockaddr = self._get_interface_sockaddr(address, service, self.family)
 
-        if not address:
-            logger.error("Invalid interface for bind(): %s", ifaddr)
+        if not sockaddr:
+            logger.error("Invalid interface for bind(): %s", address)
             return 1
 
         # if binding to a non zero port set to reuse address and, optionally,
         # to reuse port so other sockets can bind to the same address and port
         #
-        if address[1] > 0:
+        if sockaddr[1] > 0:
             reuseaddress = 1
             self.set_recvoptions(reuseaddress, reuseport)
 
         try:
-            super().bind(address)
+            super().bind(sockaddr)
         except OSError as ose:
             logger.error("Error binding mcast service to socket: %s",
                           ose.strerror)

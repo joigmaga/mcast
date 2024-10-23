@@ -5,10 +5,9 @@ import sys
 import os
 from socket import AF_UNSPEC, AF_INET, AF_INET6, inet_ntop
 
-from util.address import (SCP_LINKLOCAL,
+from util.address import (SCP_LINKLOCAL, get_address,
                      IPv4Address, IPv6Address, LinkLayerAddress,
-                     struct_sockaddr, struct_sockaddr_in, struct_sockaddr_in6,
-                     get_address,)
+                     struct_sockaddr, struct_sockaddr_in, struct_sockaddr_in6,)
 from util.getifaddrs import (GETIFADDRS_ENCODING,
                      get_network_interfaces, get_interface,)
 from util.custlogging import get_logger, ERROR, WARNING
@@ -178,9 +177,13 @@ if IS_DARWIN:
             sin  = cast(psa, POINTER(struct_sockaddr_in)).contents
             addr = GroupIPv4Address(bytes(sin.sin_addr))
         elif family == AF_INET6:
+            # in BSD, scope_id is encoded in the 4th byte of the in6 address
+            # this is true for the getifmaddrs(3) call
             sin6 = cast(psa, POINTER(struct_sockaddr_in6)).contents
-            addr = GroupIPv6Address(bytes(sin6.sin6_addr),
-                   scope_id=sin6.sin6_scope_id)
+            baddr = bytearray(sin6.sin6_addr)
+            scope_id = baddr[3]
+            baddr[3] = 0
+            addr = GroupIPv6Address(bytes(baddr), scope_id=scope_id)
         elif family == AF_LOCAL_L2:
             addr = get_sockaddr_lladdress(psa)
         
@@ -245,6 +248,46 @@ if IS_DARWIN:
                     get_sources6(iface, group)
 
         return ifaces    
+
+    def get_multicast_interfaces(group, source=None, family=AF_UNSPEC):
+        """ get all the interfaces to which 'group' and optionally 'source'
+            are subscribed """
+
+        gaddr = get_address(group)
+        if not gaddr:
+            logger.error("Invalid group address: %s", group)
+            return None
+        saddr = None
+        if source:
+            saddr = get_address(source)
+            if not saddr:
+                logger.error("Invalid source address: %s", source)
+                return None
+
+        iflist = []
+
+        ifaces = get_multicast_addresses()
+
+        for iface in ifaces:
+            found = False
+            for group in iface.groups:
+                if family != AF_UNSPEC and family != group.family:
+                    continue
+                if group.in_addr != gaddr.in_addr:
+                    continue
+                if saddr:
+                    for s in group.sources:
+                        if s.in_addr != saddr.in_addr:
+                            continue
+                        found = True
+                        break
+                else:
+                    found = True
+                if found:
+                    iflist.append(iface.name)
+                break
+
+        return iflist
 
     def get_sources(iface, group):
         """ get the sources of a given group from kernel """
@@ -440,8 +483,6 @@ if IS_DARWIN:
                               iface.igmp_rv, iface.igmp_qi,
                               iface.igmp_qri, iface.igmp_uri))
                 elif addr.family == AF_INET6:
-                    if addr.scope != SCP_LINKLOCAL:
-                        continue
                     print("\tinet6 %s" % addr.original)
                     print("\tmldv%d flags=%x<%s> rv %d qi %d qri %d uri %d" %
                              (iface.mld_querier, iface.mld_flags,

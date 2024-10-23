@@ -8,45 +8,97 @@
     - Use the standard socket interface with additions that ease
       the configuration of socket options, including methods for joining
       and leaving groups.
+    - A 'mid-level' interface with all the hooks to the 'socket' module
+    - An oversimplified 'high-level' interface for basic operations
     - Support for unicast datagram delivery in addition to multicasting
     - Use getifaddrs module to obtain interface and address information
     - Use getifmaddrs module to obtain multicast group and source information
     - Support multiple concurrent joins on a socket, up to IP_MAX_MEMBERSHIPS
     - Support Source Specific Multicast (SSM) for IPv4 and IPv6
     - Support concurrent IPv4 and IPv6 operation on the same (v6) socket
-    - Support joins and leaves to/from IPv4 and IPv6 groups on same socket
-      (Linux only)
+      (*) see below for MacOS
+    - Support joins and leaves for IPv4 and IPv6 groups on same socket
+      (*) only any-source IPv4 join/leave on v6 sockets are supported on MacOS
+      This means that IPv6 sockets can be used for sending UDP datagrams to
+      both IPv4 and IPv6 receiving sockets, whereas IPv6 sockets can receive
+      IPv6 traffic as well as IPv4 multicast for any-source groups only.
+      Unicast UDP traffic is not affected.
+      Reception of multicast traffic for specific-source IPv4 groups
+      requires at least one separate IPv4 socket 
     - Scoped multicast with interface based scope zone selection for
       link local IPv6 addresses
     - Work on Linux and MacOS
+
+    ** the 'mid-level' interface:
 
     class McastSocket(socket)
         ''' a subclass of 'socket' to simplify UDP multicasting and
             datagram delivery '''
 
-        initialize with 'msock = McastSocket(ipmode)'
+        initialize with 'msock = McastSocket(ipmode[, mcastonly=False])'
         where 'ipmode' is the working mode for the socket, which can be
         IPv4 only, IPv6 only or mixed IPv6/IPv4.
-        Select one out of IPM_IPV4, IPM_IPV6, IPM_BOTH
+        Select one out of IPM_IPV4, IPM_IPV6, IPM_BOTH (default is IPM_BOTH)
+        'mcastonly' permits restricting operation to UDP multicast only
 
     overloaded methods:
 
-        res = bind(address, service)
-        res = connect(mgroup, service)       
-        buffer, address, port = recvfrom()
-        res = sendto(buffer, mgroup, service)
-        close()
+        res = msock.bind(address, service)
+        res = msock.connect(address, service)       
+        buffer, address, port = msock.recvfrom()
+        res = msock.sendto(buffer, mgroup, service)
+        msock.close()
 
     other class methods:
 
-        res = join(mgroup, ifaddr=None, source=None)
-        res = leave(mgroup, ifaddr=None, source=None)
-        res = leaveall()
-        res = set_recvoptions(reuseaddress=-1, reuseport=-1)
-        res = set_sendoptions(fwdif=None, loop=-1, ttl=-1, prec=-1):
+        res = msock.join(mgroup, ifaddr=None, source=None)
+        res = msock.leave(mgroup, ifaddr=None, source=None)
+        res = msock.leaveall()
+        res = msock.set_recvoptions(reuseaddress=-1, reuseport=-1)
+        res = msock.set_sendoptions(fwdif=None, loop=-1, ttl=-1, prec=-1)
+
+    ** the high-level interface:
+
+    A very simple, asymmetric interface for sending-only and receiving-only
+    applications. Useful for many-to-one applications.
+    Only one group/port pair is used for communication. Sockets can be
+    configured for IPv4 or IPv6 operation.
+
+    class SenderMcastSocket(McastSocket)
+    class ReceiverMcastSocket(McastSocket)
+        ''' subclasses of McastSocket performing simplified multicast
+            datagram transfer between sender and receiver applications '''
+
+        initialize with 
+          's_msock = SenderMcastSocket(mgroup, port, [interface=None])'
+          'r_msock = ReceiverMcastSocket(mgroup, port, [interface=None])'
+        where 'mgroup' and 'port' are the multicast group and service port that
+        will be used for communication between the two sockets
+        'mgroup' can be either an IPv4 or an IPv6 address in string format
+        'port' is an integer < 65536 representing a UDP service  
+        For receiving applications, 'interface' is the network interface
+        used for joining groups and receiving traffic.
+        For sending applications, it is the interface through which 
+        datagrams are sent out.
+        It may be skipped most of the times since the system may find an
+        appropriate one for you though is recommended to specify it.
+        Scoped IPv6 multicast addresses (e.g. 'ff02::6789%eth0') may be used
+        to indicate the interface in scope for sending and receiving datagrams
+
+    high level methods:
+
+        buffer, address = r_msock.mreceive([encoding=None])
+        sent = s_msock.msend(buffer, [encoding='utf-8']) 
+
+        mreceive() does not convert result from 'bytes' to 'str' by default
+                   returns both the resulting read buffer (max size = 8192)
+                   and the remote address of peer
+        msend()    converts 'str' input to 'bytes' according to 'encoding'
+                   returns number of bytes sent
 
     meaning of arguments and return parameters:
 
+        address: (str) a unicast or multicast address
         ifname:  (str) interface name
         ifindex: (int) the interface index, a numeric identifier
         iface:   (NetworkInterface) an object containing information about
@@ -79,7 +131,7 @@
                  particular source
         buffer:  the data to be sent or the data actually received, as a
                  bytes object
-                 (bytes) the default buffer size for reads is 8192
+                 (bytes) the internal buffer size for reads is 8192
                  Note: as a datagram service, ordered and reliable delivery
                  is by no means guaranteed. User code must provide for packet
                  ordereding and retransmission when required 
@@ -88,14 +140,17 @@
                  For byte-to-byte text encoding use "iso-8859-15" or similar.
                  Example: "give me €uros".encode('utf-8'),
                            b'give me \xe2\x82\xacuros'.decode() 
+        sent:    (int) the number or bytes output in a send operation
         res:     the result of a method
                  (int) 0 means success, 1 means failure
 
     set_recvoptions and sendoptions arguments:
 
-        reuseaddress: permit two or more sockets binding to the same address
+        reuseaddress: permit two or more multicast sockets
+                 binding to the same address
                  (int) set to 1 to allow, 0 to disallow the feature
-        reuseport:    permit two or more sockets binding to the same port
+        reuseport:    permit two or more sockets binding to the same address
+                 load balance across sockets in Linux
                  (int) set to 1 to allow, 0 to disallow the feature
         fwdif:   set the forwarding interface for packets
                  for IPv4 addresses, it must be the interface address
@@ -118,32 +173,34 @@
 # system imports
 import sys
 from socket import (socket, getnameinfo, getservbyname, gaierror,
-                AF_UNSPEC, AF_INET, AF_INET6,
-                SOCK_DGRAM, IPPROTO_IP, IPPROTO_IPV6,
-                NI_NUMERICHOST, NI_NUMERICSERV,
-                IP_MAX_MEMBERSHIPS,
-                IP_MULTICAST_LOOP, IP_MULTICAST_TTL, IP_MULTICAST_IF, IP_TOS,
-                IPV6_MULTICAST_LOOP, IPV6_MULTICAST_HOPS,
-                IPV6_MULTICAST_IF, IPV6_TCLASS,
-                SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT,)
+              AF_UNSPEC, AF_INET, AF_INET6,
+              SOCK_DGRAM, IPPROTO_IP, IPPROTO_IPV6,
+              NI_NUMERICHOST, NI_NUMERICSERV,
+              IP_ADD_MEMBERSHIP, IP_ADD_SOURCE_MEMBERSHIP, IP_MAX_MEMBERSHIPS,
+              IP_DROP_MEMBERSHIP, IP_DROP_SOURCE_MEMBERSHIP,
+              IPV6_JOIN_GROUP, IPV6_LEAVE_GROUP,
+              IP_MULTICAST_LOOP, IP_MULTICAST_TTL, IP_MULTICAST_IF, IP_TOS,
+              IPV6_MULTICAST_LOOP, IPV6_MULTICAST_HOPS,
+              IPV6_MULTICAST_IF, IPV6_TCLASS,
+              SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT,)
 from select import select
 from ctypes import (Structure, pointer, POINTER, cast, sizeof,
-                    create_string_buffer,
-                    c_byte, c_ushort, c_int, c_uint8, c_uint16, c_uint32)
+              create_string_buffer,
+              c_byte, c_ushort, c_int, c_uint, c_uint8, c_uint16, c_uint32)
 
 # local imports
-from util.custlogging import get_logger, ERROR, WARNING
+from util.custlogging import get_logger, ERROR, WARNING, INFO, DEBUG
 from util.address import (SCP_INTLOCAL, SCP_LINKLOCAL, SCP_REALMLOCAL, 
-                          SCP_ADMINLOCAL, SCP_SITELOCAL, SCP_ORGANIZATION,
-                          SCP_GLOBAL,
-                          struct_in_addr,
-                          struct_sockaddr, struct_sockaddr_storage,
-                          struct_sockaddr_in, struct_sockaddr_in6,
-                          IPv4Address, IPv6Address, LinkLayerAddress,
-                          get_address,)
+              SCP_ADMINLOCAL, SCP_SITELOCAL, SCP_ORGANIZATION, SCP_GLOBAL,
+              struct_in_addr, struct_in6_addr,
+              struct_sockaddr, struct_sockaddr_storage,
+              struct_sockaddr_in, struct_sockaddr_in6,
+              IPv4Address, IPv6Address, LinkLayerAddress,
+              get_address,)
 from util.getifaddrs import (get_interface, get_interface_address,
-                             get_interface_by_id, get_interface_index,
-                             find_interface_address,)
+              get_interface_by_id, get_interface_index,
+              find_interface_address,)
+from util.getifmaddrs import get_multicast_interfaces
 
 #################
 # Constants
@@ -160,8 +217,9 @@ IPM_BOTH = 46
 #
 ST_CLOSED    = 0
 ST_OPEN      = 1
-ST_BOUND     = 3
-ST_CONNECTED = 5
+
+FLG_BOUND     = 2
+FLG_CONNECTED = 4
 
 # check address type
 #
@@ -175,7 +233,7 @@ BUFFSIZE = 8192
 
 # log object for this module
 #
-logger = get_logger(__name__, WARNING)
+logger = get_logger(__name__, INFO)
 #
 #     Platform dependencies
 #     from netinet/in.h
@@ -205,6 +263,8 @@ else:
 #
 # from netinet/in.h
 #
+# Structures to set socket options
+#
 # The following structures have different alignment requierements in MacOS
 # and Linux
 #
@@ -213,12 +273,35 @@ if PLATFORM == 'darwin':
 elif PLATFORM.startswith('linux'):
     align = 8
 
+# IP_MULTICAST_IF
+class struct_ip_mreqn(Structure):
+    _fields_ = [
+        ('imr_multiaddr',    struct_in_addr),
+        ('imr_address',      struct_in_addr),
+        ('imr_ifindex',      c_int),]
+
+# IP_ADD_MEMBERSHIP/IP_DROP_MEMBERSHIP
+class struct_ip_mreq(Structure):
+    _fields_ = [
+        ('imr_multiaddr',    struct_in_addr),
+        ('imr_interface',    struct_in_addr),]
+
+# IP_ADD_SOURCE_MEMBERSHIP/IP_DROP_SOURCE_MEMBERSHIP
+class struct_ip_mreq_source(Structure):
+    _pack_   = align
+    _fields_ = [ 
+        ('imr_multiaddr',    struct_in_addr),
+        ('imr_sourceaddr',   struct_in_addr),
+        ('imr_interface',    struct_in_addr),]
+   
+# MCAST_JOIN_GROUP/MCAST_LEAVE_GROUP
 class struct_group_req(Structure):
     _pack_   = align
     _fields_ = [
         ('gr_interface',     c_uint32),
         ('gr_group',         struct_sockaddr_storage),]
 
+# MCAST_JOIN_SOURCE_GROUP/MCAST_LEAVE_SOURCE_GROUP
 class struct_group_source_req(Structure):
     _pack_   = align
     _fields_ = [
@@ -226,19 +309,21 @@ class struct_group_source_req(Structure):
         ('gsr_group',        struct_sockaddr_storage),
         ('gsr_source',       struct_sockaddr_storage),]
 
-class struct_ip_mreqn(Structure):
-        _fields_ = [
-            ('imr_multiaddr',    struct_in_addr),
-            ('imr_address',      struct_in_addr),
-            ('imr_ifindex',      c_int),]
-   
+# netinet6/in6.h
+#
+# IPV6_JOIN_GROUP/IPV6_LEAVE_GROUP
+class struct_ipv6_mreq(Structure):
+    _fields_ = [
+        ('ipv6mr_multiaddr', struct_in6_addr),
+        ('ipv6mr_interface', c_uint32),]
+
 #############################################################
 #
 class McastSocket(socket):
     """ a subclass of 'socket' that simplifies applications doing multicast
         and generic datagram exchange"""
 
-    def __init__(self, ipmode=IPM_BOTH, fileno=None):
+    def __init__(self, ipmode=IPM_BOTH, mcastonly=False, fileno=None):
 
         if ipmode == IPM_IP:
             family = AF_INET
@@ -264,9 +349,12 @@ class McastSocket(socket):
         self.joined        = 0
         self.joined_groups = []
 
-        self.state   = ST_OPEN
+        self.mcastonly = mcastonly
 
-    def _get_multicast_sockaddr(self, mgroup, service, mcastonly=False):
+        self.state = ST_OPEN
+        self.flags = 0
+
+    def _get_multicast_sockaddr(self, mgroup, service):
         """ obtain the sockaddr structure parameter for a multicast group
             sockaddr in Python's address tuple format (host, port) or
             (host, port, flowinfo, scope_id) for the AF_INET6 family
@@ -284,7 +372,10 @@ class McastSocket(socket):
                   mgroup, service)
             return None
 
-        if mcastonly and not maddr.is_multicast():
+        if not maddr:
+            return None
+
+        if self.mcastonly and not maddr.is_multicast():
             # disallow unicast datagram transmission
             logger.error("invalid multicast group: %s", mgroup)
             return None
@@ -294,7 +385,7 @@ class McastSocket(socket):
             return None
         elif maddr.family == AF_INET and self.family == AF_INET6:
             if self.v6only:
-                logger.error("Socket solely configured for IPv6 operation")
+                logger.error("Socket configured solely for IPv6 operation")
                 return None
 
         return maddr.sockaddr
@@ -326,17 +417,65 @@ class McastSocket(socket):
 
         return addrobj.sockaddr
 
-    def _build_sockaddr(self, ipaddr, check=CHK_NONE):
-        """ build a sockaddr_storage structure and cast it to
-            the appropiate sockaddr according to address family
-            used in join() and leave() """
+    def _build_mreq6(self, gaddr, ifindex):
+        """ build an ipv6_mreq structure for IPV6_JOIN_GROUP """
 
-        addrobj = get_address(ipaddr)
-        if not addrobj:
+        if not gaddr:
             return None
 
-        if ((check == CHK_MULTICAST and not addrobj.is_multicast()) or
-            (check == CHK_UNICAST   and addrobj.is_multicast())):
+        mreq6 = struct_ipv6_mreq()
+        mreq6.ipv6mr_multiaddr.s6_addr[:] = gaddr.in_addr
+        mreq6.ipv6mr_interface = ifindex
+
+        return mreq6
+
+    def _build_mreq(self, gaddr, ifindex):
+        """ build an ip_mreq structure for IP_ADD_MEMBERSHIP """
+
+        if not gaddr:
+            return None
+
+        iface = get_address("0.0.0.0")
+        if ifindex:
+            ifc = get_interface_by_id(ifindex) 
+            if ifc:
+                iface = get_interface_address(ifc.name, AF_INET)
+        
+        mreq = struct_ip_mreq()
+        mreq.imr_multiaddr.s_addr = int.from_bytes(gaddr.in_addr, sys.byteorder)
+        mreq.imr_interface.s_addr = int.from_bytes(iface.in_addr, sys.byteorder)
+
+        return mreq
+
+    def _build_mreq_source(self, gaddr, saddr, ifindex):
+        """ build an ip_mreq_source structure for IP_ADD_SOURCE_MEMBERSHIP """
+
+        if not gaddr or not saddr:
+            return None
+
+        iface = get_address("0.0.0.0")
+        if ifindex:
+            ifc = get_interface_by_id(ifindex) 
+            if ifc:
+                iface = get_interface_address(ifc.name, AF_INET)
+        
+        mreqs = struct_ip_mreq_source()
+        mreqs.imr_multiaddr.s_addr  = int.from_bytes(gaddr.in_addr,
+                                                     sys.byteorder)
+        mreqs.imr_sourceaddr.s_addr = int.from_bytes(saddr.in_addr,
+                                                     sys.byteorder)
+        mreqs.imr_interface.s_addr  = int.from_bytes(iface.in_addr,
+                                                     sys.byteorder)
+
+        return mreqs
+
+    def _build_sockaddr(self, addrobj):
+        """ build a sockaddr_storage structure and cast it to
+            the appropiate sockaddr according to address family
+            for MCAST_JOIN_GROUP and MCAST_JOIN_SOURCE_GROUP
+            used in join() and leave() """
+
+        if not addrobj:
             return None
 
         ss = struct_sockaddr_storage()
@@ -361,41 +500,43 @@ class McastSocket(socket):
 
         return ss
 
-    def _get_optvalue(self, mgroup, ifaddr, source):
+    def _get_optvalue(self, option, gaddr, saddr, ifindex):
         """ build an structure group_req or group_source_req
             if source address is present """
 
-        ifindex = 0
-        if ifaddr:
-            ifindex = get_interface_index(ifaddr)
-
-        # ifaddr = None, "" or 0 are an indication to the kernel
-        # to select a joining interface using routing information
-        # this seemingly works on Linux unlike on MacOS
-        if ifaddr and (ifindex == 0):
-            logger.error("Invalid interface name or address: %s", ifaddr)
-            return None
-
-        groupaddr = self._build_sockaddr(mgroup, check=CHK_MULTICAST)
-        if not groupaddr:
-            logger.error("Invalid multicast group address: %s", mgroup)
-            return None
-
-        if source:
-            sourceaddr = self._build_sockaddr(source, check=CHK_UNICAST)
-            if not sourceaddr:
-                logger.error("Invalid unicast source address: %s", source)
-                return None
+        # This is a mess because IP_ADD_MEMBERSHIP and IPV6_JOIN_GROUP
+        # have the same value
+        if self.family == AF_INET and (
+                option == IP_ADD_MEMBERSHIP or option == IP_DROP_MEMBERSHIP):
+            # interface less join/leave
+            grp = self._build_mreq(gaddr, ifindex)
+        elif self.family == AF_INET and (
+                option == IP_ADD_SOURCE_MEMBERSHIP or
+                option == IP_DROP_SOURCE_MEMBERSHIP):
+            grp = self._build_mreq_source(gaddr, saddr, ifindex)
+        elif self.family == AF_INET6 and (
+                  option == IPV6_JOIN_GROUP or option == IPV6_LEAVE_GROUP):
+            # IPV4 group join on IPV6 socket
+            # Note: no IPV6_JOIN_SOURCE_GROUP in BSD. So sources not allowed
+            grp = self._build_mreq6(gaddr, ifindex)
+        elif option == MCAST_JOIN_GROUP or option == MCAST_LEAVE_GROUP:
+            groupaddr = self._build_sockaddr(gaddr)
+            grp = struct_group_req()
+            grp.gr_interface = ifindex
+            grp.gr_group     = groupaddr
+        elif option == MCAST_JOIN_SOURCE_GROUP or (
+             option == MCAST_LEAVE_SOURCE_GROUP):
+            groupaddr  = self._build_sockaddr(gaddr)
+            sourceaddr = self._build_sockaddr(saddr)
             grp = struct_group_source_req()
             grp.gsr_interface = ifindex
             grp.gsr_group     = groupaddr
             grp.gsr_source    = sourceaddr
         else:
-            grp = struct_group_req()
-            grp.gr_interface = ifindex
-            grp.gr_group     = groupaddr
+            logger.error("Invalid socket option for join/leave: %d", option)
+            return None
 
-        return grp
+        return bytes(grp)
 
     def _join_leave(self, mgroup, ifaddr, source, isjoin=True):
 
@@ -409,6 +550,37 @@ class McastSocket(socket):
             logger.error("exceeded max number of multicast groups %s", tag)
             return 1
 
+        ifindex = 0
+        if ifaddr:
+            ifindex = get_interface_index(ifaddr)
+            
+        # ifaddr = None, "" or 0 are an indication to the kernel
+        # to select a joining interface using routing information
+        # this seemingly works on Linux unlike on MacOS
+        if ifaddr and (ifindex == 0):
+            logger.error("Invalid interface name or address: %s", ifaddr)
+            return 1
+
+        gaddr = get_address(mgroup, type=SOCK_DGRAM)
+        if not gaddr or not gaddr.is_multicast():
+            logger.error("Invalid multicast address format: %s", mgroup)
+            return 1
+        if gaddr.family == AF_INET6 and ifindex == 0:
+            ifindex = gaddr.scope_id
+            if ifindex == 0:
+                logger.error(
+                   "Must specify join interface for IPv6 address: %s", gaddr)
+                return 1
+
+        saddr = None
+        if source:
+            saddr = get_address(source)
+            if not saddr or saddr.is_multicast():
+                logger.error("Invalid unicast source address: %s", source)
+                return 1
+            if saddr.family != gaddr.family:
+                logger.warning("Group/Source address family mismatch")
+
         if PLATFORM == 'darwin':
             # MacOS requires 'proto' to be aligned with the socket family
             if self.family == AF_INET:
@@ -417,33 +589,58 @@ class McastSocket(socket):
                 proto = IPPROTO_IPV6
         else:
             # Linux ipv6 sockets allow for joins on either family addresses
-            maddrobj = get_address(mgroup, type=SOCK_DGRAM)
-            if not maddrobj:
-                logger.error("Invalid multicast group address: %s", mgroup)
-                return 1
-            proto = 0
-            if maddrobj.family == AF_INET:
+            if gaddr.family == AF_INET:
                 proto = IPPROTO_IP
-            elif maddrobj.family == AF_INET6:
+            elif gaddr.family == AF_INET6:
                 proto = IPPROTO_IPV6
 
-        if isjoin:
-            option = MCAST_JOIN_GROUP
-            if source:
-                option = MCAST_JOIN_SOURCE_GROUP    
-        else:
-            option = MCAST_LEAVE_GROUP
-            if source:
-                option = MCAST_LEAVE_SOURCE_GROUP
+        # Default socket option for any-source groups in all platforms
+        join_option  = MCAST_JOIN_GROUP
+        leave_option = MCAST_LEAVE_GROUP
+        if source:
+            # Default socket option for source-specific groups in all platforms
+            join_option  = MCAST_JOIN_SOURCE_GROUP    
+            leave_option = MCAST_LEAVE_SOURCE_GROUP    
+        if PLATFORM == 'darwin':
+            # Join v6 group on v4 socket. Not possible on MacOS
+            if self.family == AF_INET and gaddr.family == AF_INET6:
+                logger.error(
+                 "Address incompatible with IPV4 socket family: %s", gaddr)
+                return 1
+            if self.family == AF_INET and not ifindex:
+                # No interface. Let the system find one
+                join_option  = IP_ADD_MEMBERSHIP
+                leave_option = IP_DROP_MEMBERSHIP
+                if source:
+                    join_option  = IP_ADD_SOURCE_MEMBERSHIP
+                    leave_option = IP_DROP_SOURCE_MEMBERSHIP
+            if self.family == AF_INET6 and gaddr.family == AF_INET:
+                # v4 join on v6 socket. Available on MacOS 
+                if not source:
+                    gaddr = get_address(gaddr.ipv4mapped)
+                    join_option  = IPV6_JOIN_GROUP
+                    leave_option = IPV6_LEAVE_GROUP
+            if self.family == AF_INET6 and gaddr.family == AF_INET6:
+                if gaddr.is_v4mapped() and not source:
+                    # v6 mapped v4 multicast address
+                    join_option  = IPV6_JOIN_GROUP
+                    leave_option = IPV6_LEAVE_GROUP
 
-        value = self._get_optvalue(mgroup, ifaddr, source)
+        if isjoin:
+            option = join_option
+        else:
+            option = leave_option
+
+        value = self._get_optvalue(option, gaddr, saddr, ifindex)
         if not value:
             return 1
 
         try:
             # this is the actual IGMP join/leave
             #
-            self.setsockopt(proto, option, bytes(value))
+            logger.debug("proto: %d, option: %d, value: %s, len: %d",
+                          proto, option, value, len(value))
+            self.setsockopt(proto, option, value)
         except OSError as ose:
             logger.error("Multicast %s group error (%d): %s",
                           tag, ose.errno, ose.strerror)
@@ -485,7 +682,7 @@ class McastSocket(socket):
                           ose.strerror)
             return 1
 
-        self.state = ST_BOUND
+        self.flags |= FLG_BOUND
 
         return 0
 
@@ -502,7 +699,7 @@ class McastSocket(socket):
         address = self._get_multicast_sockaddr(mgroup, service)
 
         if not address:
-            logger.error("Invalid multicast group address: %s", mgroup)
+            logger.error("Invalid multicast address (connect): %s", mgroup)
             return 1
 
         try:
@@ -512,7 +709,7 @@ class McastSocket(socket):
                           ose.errno, ose.strerror)
             return 1
 
-        self.state = ST_CONNECTED
+        self.flags |= FLG_CONNECTED
 
         return 0
 
@@ -551,7 +748,8 @@ class McastSocket(socket):
         address = self._get_multicast_sockaddr(mgroup, service)
 
         if not address:
-            logger.error("Invalid multicast group address: %s", mgroup)
+            logger.error("Invalid multicast group address/service: %s, %s",
+                          mgroup, service)
             return 0
 
         if isinstance(buffer, str):
@@ -642,7 +840,7 @@ class McastSocket(socket):
         if self.family == AF_INET:
             if not fwdint:
                 # fwdint = None, 0
-                fwif = bytes(4)
+                fwif = bytes(sizeof(struct_in_addr))
             else:
                 iface = get_interface_by_id(fwdint)
                 if not iface:
@@ -696,8 +894,10 @@ class McastSocket(socket):
             opt_mif  = IPV6_MULTICAST_IF
             opt_tos  = IPV6_TCLASS
 
-        fwdint = 0
-        if fwdif:
+        fwdint = -1
+        if fwdif == 0:
+            fwdint = 0
+        elif fwdint:
             fwdint = get_interface_index(fwdif)
 
         try:
@@ -705,7 +905,7 @@ class McastSocket(socket):
                 self.setsockopt(proto, opt_loop, loop)
             if 0 < ttl < 256 and ttl != self.getsockopt(proto, opt_ttl):
                 self.setsockopt(proto, opt_ttl,  ttl)
-            if fwdint != self.getfwdint():
+            if fwdint >= 0 and fwdint != self.getfwdint():
                 self.setfwdint(fwdint)
             if prec > 0 and prec != self.getsockopt(proto, opt_tos):
                 self.setsockopt(proto, opt_tos,  (prec & 0x07) << 5)
@@ -715,6 +915,72 @@ class McastSocket(socket):
             return 1
 
         return 0
+
+# High level interface
+#
+
+class SenderMcastSocket(McastSocket):
+
+    def __init__(self, mgroup, port, interface=None):
+
+        self.mgroup    = mgroup
+        self.port      = port
+
+        maddr = get_address(mgroup, port)
+        if not maddr:
+            logger.error("Invalid multicast group/port pair '%s, %d'",
+                          mgroup, port)
+            raise ValueError
+
+        if not maddr.is_multicast():
+            logger.error("Invalid multicast group '%s'", mgroup)
+            raise ValueError
+
+        mode = IPM_IPV4
+        if maddr.family == AF_INET6:
+            mode = IPM_IPV6
+
+        super().__init__(mode)
+
+        if interface:
+            self.set_sendoptions(fwdif=interface)
+
+    def msend(self, buffer, encoding='utf-8'):
+
+        return self.sendto(buffer, self.mgroup, self.port, encoding)
+
+class ReceiverMcastSocket(McastSocket):
+
+    def __init__(self, mgroup, port, interface=None):
+
+        maddr = get_address(mgroup, port)
+        if not maddr:
+            logger.error("Invalid multicast group/port pair '%s, %d'",
+                          mgroup, port)
+            raise ValueError
+
+        if not maddr.is_multicast():
+            logger.error("Invalid multicast group '%s'", mgroup)
+            raise ValueError
+
+        mode = IPM_IPV4
+        if maddr.family == AF_INET6:
+            mode = IPM_IPV6
+
+        super().__init__(mode)
+
+        res = self.bind(mgroup, port)
+        if res == 0:
+            res = self.join(mgroup, interface)
+
+        if res != 0:
+            raise ValueError
+
+    def mreceive(self, encoding=None):
+
+        buffer, address, port = self.recvfrom(encoding)
+
+        return buffer, address
 
 ##########
 # utility functions
@@ -813,13 +1079,15 @@ def mcast_server(grouplist, port, interface, task=do_something):
             continue
 
         maddr = get_address(group, type=SOCK_DGRAM)
-        if maddr and maddr.family == AF_INET:
-            v4groups.append((group, ifaddr, source))
-        elif maddr and maddr.family == AF_INET6:
-            v6groups.append((group, ifaddr, source))
-        else:
+        if not maddr:
             logger.error("Invalid multicast group: %s", group)
             return 1
+
+        # MacOS disallows joins for source-specific v4 groups on v6 sockets
+        if PLATFORM == 'darwin' and maddr.family == AF_INET and source:
+            v4groups.append((group, ifaddr, source))
+        else:
+            v6groups.append((group, ifaddr, source))
 
     # check that at least one list is not empty
     #

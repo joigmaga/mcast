@@ -135,11 +135,11 @@ class Address:
 
     def __init__(self, address, family):
 
-        self.in_addr    = address
-        self.family     = family
-        self.next       = None
+        self.in_addr   = address
+        self.family    = family
+        self.next      = None
 
-        self.printable   = ""
+        self.printable = ""
 
     def __str__(self):
 
@@ -159,8 +159,7 @@ class IPv4Address(Address):
         self.printable = host
 
         # IPv4 mapped IPv6 address returned in a dual socket
-        self.ipv4mapped = '::ffff:' + ("%08x" % int.from_bytes(self.in_addr,
-                                                               'big'))
+        self.ipv4mapped = '::ffff:' + host
 
         # to be set later
         self.service  = 0
@@ -198,7 +197,7 @@ class IPv6Address(Address):
 
         # IPv6 mapped IPv4 address returned in a dual socket
         self.map4 = None
-        if self.in_addr[10:12] == b'\xff\xff':
+        if self.is_v4mapped():
             self.map4 = inet_ntop(AF_INET, self.in_addr[12:])
 
         # to be set later
@@ -209,7 +208,7 @@ class IPv6Address(Address):
     def get_scope(self):
         """ obtain the embedded scope of an address """
 
-        if int.from_bytes(self.in_addr) == 1:
+        if int.from_bytes(self.in_addr, 'big') == 1:
             scope = SCP_INTLOCAL                  # interface local (loopback)
         elif self.in_addr[0] == 0xfe and ((self.in_addr[1] & 0xc0) == 0x80):
             scope = SCP_LINKLOCAL                 # link local
@@ -224,11 +223,6 @@ class IPv6Address(Address):
 
         return scope
 
-    def is_global(self):
-        """ check whether address has global scope (includes loopback) """
-
-        return self.scope in (SCP_INTLOCAL, SCP_GLOBAL)
-
     def is_multicast(self):
         """ check whether an address is multicast or not """
 
@@ -237,6 +231,11 @@ class IPv6Address(Address):
             return (self.in_addr[12] & 0xf0) == 0xe0
 
         return self.in_addr and self.in_addr[0] == 0xff
+
+    def is_v4mapped(self):
+
+        return self.in_addr[:12] == \
+           b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff"
 
 class LinkLayerAddress(Address):
     """ A class for layer 2 addresses """
@@ -290,7 +289,11 @@ def check_ip_address(taddr:   str,
     except (ValueError, TypeError) as excp:
         logger.error("Invalid type: '%s'", str(excp))
     except gaierror:
-        logger.error("Invalid IP address '%s'", taddr)
+        if not service:
+            logger.info("Invalid IP address '%s'", taddr)
+        else:
+            logger.info("Invalid IP address/service pair '%s, %s'",
+                         taddr, service)
 
     return addrlist
 
@@ -325,7 +328,7 @@ def get_ip_address(taddr:   str,
             ipaddr = IPv4Address(baddr, host)
         elif family == AF_INET6:
             scope_id = sockaddr[3]
-            ipaddr = IPv6Address(baddr, host, scope_id)
+            ipaddr   = IPv6Address(baddr, host, scope_id)
 
         ipaddr.service  = sockaddr[1]
         ipaddr.sockaddr = sockaddr
@@ -354,7 +357,7 @@ def get_address(
     elif family == AF_UNSPEC:
         if not taddr:
             logger.error("Ambiguous INADDR_ANY address without family. "
-              "Specify family or use T_INADDR_ANY for IPv4, '::' for IPv6")
+              "Specify family or use '0.0.0.0' for IPv4, '::' for IPv6")
         else:
             address = get_ip_address(taddr, service, AF_UNSPEC, type, proto) 
     elif family == AF_INET:

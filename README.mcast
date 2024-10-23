@@ -1,4 +1,4 @@
-""" A multicast interface to Python's socket library 
+""" A multicast interface to the socket library 
 
     Ignacio Martinez (igmartin@movistar.es)
     January 2023
@@ -8,45 +8,97 @@
     - Use the standard socket interface with additions that ease
       the configuration of socket options, including methods for joining
       and leaving groups.
+    - A 'mid-level' interface with all the hooks to the 'socket' module
+    - An oversimplified 'high-level' interface for basic operations
     - Support for unicast datagram delivery in addition to multicasting
     - Use getifaddrs module to obtain interface and address information
     - Use getifmaddrs module to obtain multicast group and source information
     - Support multiple concurrent joins on a socket, up to IP_MAX_MEMBERSHIPS
     - Support Source Specific Multicast (SSM) for IPv4 and IPv6
     - Support concurrent IPv4 and IPv6 operation on the same (v6) socket
-    - Support joins and leaves to/from IPv4 and IPv6 groups on same socket
-      (Linux only)
+      (*) see below for MacOS
+    - Support joins and leaves for IPv4 and IPv6 groups on same socket
+      (*) only any-source IPv4 join/leave on v6 sockets are supported on MacOS
+      This means that IPv6 sockets can be used for sending UDP datagrams to
+      both IPv4 and IPv6 receiving sockets, whereas IPv6 sockets can receive
+      IPv6 traffic as well as IPv4 multicast for any-source groups only.
+      Unicast UDP traffic is not affected.
+      Reception of multicast traffic for specific-source IPv4 groups
+      requires at least one separate IPv4 socket 
     - Scoped multicast with interface based scope zone selection for
       link local IPv6 addresses
     - Work on Linux and MacOS
+
+    ** the 'mid-level' interface:
 
     class McastSocket(socket)
         ''' a subclass of 'socket' to simplify UDP multicasting and
             datagram delivery '''
 
-        initialize with 'msock = McastSocket(ipmode)'
+        initialize with 'msock = McastSocket(ipmode[, mcastonly=False])'
         where 'ipmode' is the working mode for the socket, which can be
         IPv4 only, IPv6 only or mixed IPv6/IPv4.
-        Select one out of IPM_IPV4, IPM_IPV6, IPM_BOTH
+        Select one out of IPM_IPV4, IPM_IPV6, IPM_BOTH (default is IPM_BOTH)
+        'mcastonly' permits restricting operation to UDP multicast only
 
     overloaded methods:
 
-        res = bind(ifaddr, service)
-        res = connect(mgroup, service)       
-        buffer, address, port = recvfrom()
-        res = sendto(buffer, mgroup, service)
-        close()
+        res = msock.bind(address, service)
+        res = msock.connect(address, service)       
+        buffer, address, port = msock.recvfrom()
+        res = msock.sendto(buffer, mgroup, service)
+        msock.close()
 
     other class methods:
 
-        res = join(mgroup, ifaddr=None, source=None)
-        res = leave(mgroup, ifaddr=None, source=None)
-        res = leaveall()
-        res = set_recvoptions(reuseaddress=-1, reuseport=-1)
-        res = set_sendoptions(fwdif=None, loop=-1, ttl=-1, prec=-1):
+        res = msock.join(mgroup, ifaddr=None, source=None)
+        res = msock.leave(mgroup, ifaddr=None, source=None)
+        res = msock.leaveall()
+        res = msock.set_recvoptions(reuseaddress=-1, reuseport=-1)
+        res = msock.set_sendoptions(fwdif=None, loop=-1, ttl=-1, prec=-1)
+
+    ** the high-level interface:
+
+    A very simple, asymmetric interface for sending-only and receiving-only
+    applications. Useful for many-to-one applications.
+    Only one group/port pair is used for communication. Sockets can be
+    configured for IPv4 or IPv6 operation.
+
+    class SenderMcastSocket(McastSocket)
+    class ReceiverMcastSocket(McastSocket)
+        ''' subclasses of McastSocket performing simplified multicast
+            datagram transfer between sender and receiver applications '''
+
+        initialize with 
+          's_msock = SenderMcastSocket(mgroup, port, [interface=None])'
+          'r_msock = ReceiverMcastSocket(mgroup, port, [interface=None])'
+        where 'mgroup' and 'port' are the multicast group and service port that
+        will be used for communication between the two sockets
+        'mgroup' can be either an IPv4 or an IPv6 address in string format
+        'port' is an integer < 65536 representing a UDP service  
+        For receiving applications, 'interface' is the network interface
+        used for joining groups and receiving traffic.
+        For sending applications, it is the interface through which 
+        datagrams are sent out.
+        It may be skipped most of the times since the system may find an
+        appropriate one for you though is recommended to specify it.
+        Scoped IPv6 multicast addresses (e.g. 'ff02::6789%eth0') may be used
+        to indicate the interface in scope for sending and receiving datagrams
+
+    high level methods:
+
+        buffer, address = r_msock.mreceive([encoding=None])
+        sent = s_msock.msend(buffer, [encoding='utf-8']) 
+
+        mreceive() does not convert result from 'bytes' to 'str' by default
+                   returns both the resulting read buffer (max size = 8192)
+                   and the remote address of peer
+        msend()    converts 'str' input to 'bytes' according to 'encoding'
+                   returns number of bytes sent
 
     meaning of arguments and return parameters:
 
+        address: (str) a unicast or multicast address
         ifname:  (str) interface name
         ifindex: (int) the interface index, a numeric identifier
         iface:   (NetworkInterface) an object containing information about
@@ -79,7 +131,7 @@
                  particular source
         buffer:  the data to be sent or the data actually received, as a
                  bytes object
-                 (bytes) the default buffer size for reads is 8192
+                 (bytes) the internal buffer size for reads is 8192
                  Note: as a datagram service, ordered and reliable delivery
                  is by no means guaranteed. User code must provide for packet
                  ordereding and retransmission when required 
@@ -88,14 +140,17 @@
                  For byte-to-byte text encoding use "iso-8859-15" or similar.
                  Example: "give me €uros".encode('utf-8'),
                            b'give me \xe2\x82\xacuros'.decode() 
+        sent:    (int) the number or bytes output in a send operation
         res:     the result of a method
                  (int) 0 means success, 1 means failure
 
     set_recvoptions and sendoptions arguments:
 
-        reuseaddress: permit two or more sockets binding to the same address
+        reuseaddress: permit two or more multicast sockets
+                 binding to the same address
                  (int) set to 1 to allow, 0 to disallow the feature
-        reuseport:    permit two or more sockets binding to the same port
+        reuseport:    permit two or more sockets binding to the same address
+                 load balance across sockets in Linux
                  (int) set to 1 to allow, 0 to disallow the feature
         fwdif:   set the forwarding interface for packets
                  for IPv4 addresses, it must be the interface address

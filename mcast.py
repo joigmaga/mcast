@@ -172,17 +172,20 @@
 
 # system imports
 import sys
+PLATFORM = sys.platform
+
 from socket import (socket, getnameinfo, getservbyname, gaierror,
               AF_UNSPEC, AF_INET, AF_INET6,
               SOCK_DGRAM, IPPROTO_IP, IPPROTO_IPV6,
               NI_NUMERICHOST, NI_NUMERICSERV,
-              IP_ADD_MEMBERSHIP, IP_ADD_SOURCE_MEMBERSHIP, IP_MAX_MEMBERSHIPS,
-              IP_DROP_MEMBERSHIP, IP_DROP_SOURCE_MEMBERSHIP,
+              IP_ADD_MEMBERSHIP, IP_MAX_MEMBERSHIPS, IP_DROP_MEMBERSHIP,
               IPV6_JOIN_GROUP, IPV6_LEAVE_GROUP,
               IP_MULTICAST_LOOP, IP_MULTICAST_TTL, IP_MULTICAST_IF, IP_TOS,
               IPV6_MULTICAST_LOOP, IPV6_MULTICAST_HOPS,
               IPV6_MULTICAST_IF, IPV6_TCLASS,
               SOL_SOCKET, SO_REUSEADDR, SO_REUSEPORT,)
+if PLATFORM == 'darwin':
+    from socket import IP_ADD_SOURCE_MEMBERSHIP, IP_DROP_SOURCE_MEMBERSHIP
 from select import select
 from ctypes import (Structure, pointer, POINTER, cast, sizeof,
               create_string_buffer,
@@ -200,7 +203,6 @@ from util.address import (SCP_INTLOCAL, SCP_LINKLOCAL, SCP_REALMLOCAL,
 from util.getifaddrs import (get_interface, get_interface_address,
               get_interface_by_id, get_interface_index,
               find_interface_address,)
-from util.getifmaddrs import get_multicast_interfaces
 
 #################
 # Constants
@@ -238,7 +240,6 @@ logger = get_logger(__name__, INFO)
 #     Platform dependencies
 #     from netinet/in.h
 #
-PLATFORM = sys.platform
 if PLATFORM == 'darwin':
     SIN_LEN                   = True
     IPV6_V6ONLY               = 27
@@ -249,6 +250,8 @@ if PLATFORM == 'darwin':
 elif PLATFORM.startswith('linux'):
     SIN_LEN                   = False
     IPV6_V6ONLY               = 26
+    IP_ADD_SOURCE_MEMBERSHIP  = 39
+    IP_DROP_SOURCE_MEMBERSHIP = 40
     MCAST_JOIN_GROUP          = 42 
     MCAST_LEAVE_GROUP         = 45 
     MCAST_JOIN_SOURCE_GROUP   = 46 

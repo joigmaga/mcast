@@ -1,6 +1,11 @@
 #! /usr/bin/env python3
 
-from socket import AF_INET, AF_INET6, AF_LINK
+import sys
+from socket import AF_INET, AF_INET6
+if sys.platform == 'darwin':
+    from socket import AF_LINK as AF_LOCAL_L2
+else:
+    from socket import AF_PACKET as AF_LOCAL_L2
 from util.address import get_address
 
 a = get_address("130.206.1.5", 0, AF_INET)

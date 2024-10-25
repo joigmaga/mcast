@@ -735,7 +735,7 @@ class McastSocket(socket):
         fwdint = -1
         if fwdif == 0:
             fwdint = 0
-        elif fwdint:
+        elif fwdif:
             fwdint = get_interface_index(fwdif)
 
         try:
